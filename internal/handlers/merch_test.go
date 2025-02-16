@@ -10,6 +10,8 @@ import (
     "avito-shop/internal/auth"
     _ "github.com/lib/pq"
     "github.com/gorilla/context"
+    "fmt"
+    "time"
 )
 
 func TestGetMerchList(t *testing.T) {
@@ -39,7 +41,7 @@ func TestBuyMerch(t *testing.T) {
 
     user := models.User{
         Name:     "Test User",
-        Email:    "test.user@example.com",
+        Email:    fmt.Sprintf("test.user+%d@example.com", time.Now().UnixNano()),
         Password: "password",
         Balance:  1000,
     }
