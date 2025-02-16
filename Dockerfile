@@ -1,11 +1,12 @@
 FROM golang:1.22
 
-WORKDIR ${GOPATH}/avito-shop/
-COPY . ${GOPATH}/avito-shop/
+WORKDIR /app
+COPY . .
 
-RUN go build -o /build ./cmd \
-    && go clean -cache -modcache
+RUN go mod download
 
-EXPOSE 8080
+# Установка утилиты godotenv для работы с .env файлами
+RUN go get github.com/joho/godotenv
 
-CMD ["/build"]
+# Запуск тестов
+CMD ["go", "test", "./..."]
