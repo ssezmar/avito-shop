@@ -44,11 +44,10 @@ func main() {
     // Маршруты с защитой JWT
     api := r.PathPrefix("/api").Subrouter()
     api.Use(auth.JWTMiddleware(jwtSecret))
-    api.HandleFunc("/users", handlers.CreateUser(dbConn)).Methods("POST")
-    api.HandleFunc("/users", handlers.GetUsers(dbConn)).Methods("GET")
-    api.HandleFunc("/users/{id}", handlers.GetUser(dbConn)).Methods("GET")
-    api.HandleFunc("/users/{id}", handlers.UpdateUser(dbConn)).Methods("PUT")
-    api.HandleFunc("/users/{id}", handlers.DeleteUser(dbConn)).Methods("DELETE")
+    api.HandleFunc("/merch", handlers.GetMerchList).Methods("GET")
+    api.HandleFunc("/merch/buy", handlers.BuyMerch(dbConn)).Methods("POST")
+    api.HandleFunc("/transactions", handlers.GetTransactions(dbConn)).Methods("GET")
+    api.HandleFunc("/transactions/transfer", handlers.TransferCoins(dbConn)).Methods("POST")
 
     // Запускаем HTTP сервер
     log.Println("Запуск сервера на порту 8080...")

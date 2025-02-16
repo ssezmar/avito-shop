@@ -4,169 +4,93 @@ import (
     "encoding/json"
     "net/http"
     "avito-shop/internal/models"
-    "avito-shop/internal/auth"
-    "github.com/gorilla/mux"
     "database/sql"
-    "strconv"
-    "golang.org/x/crypto/bcrypt"
+    "github.com/gorilla/context"
 )
 
-func Register(db *sql.DB, jwtSecret string) http.HandlerFunc {
+func GetTransactions(db *sql.DB) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
-        var user models.User
-        if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
+        email := context.Get(r, "user").(string)
+        user, err := models.GetByEmail(db, email)
+        if err != nil {
+            http.Error(w, "User not found", http.StatusNotFound)
+            return
+        }
+
+        transactions, err := models.GetTransactionsByUserID(db, user.ID)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        json.NewEncoder(w).Encode(transactions)
+    }
+}
+
+func TransferCoins(db *sql.DB) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        var request struct {
+            RecipientEmail string `json:"recipient_email"`
+            Amount         int    `json:"amount"`
+        }
+        if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
             http.Error(w, err.Error(), http.StatusBadRequest)
             return
         }
 
-        hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+        senderEmail := context.Get(r, "user").(string)
+        sender, err := models.GetByEmail(db, senderEmail)
         if err != nil {
+            http.Error(w, "Sender not found", http.StatusNotFound)
+            return
+        }
+
+        recipient, err := models.GetByEmail(db, request.RecipientEmail)
+        if err != nil {
+            http.Error(w, "Recipient not found", http.StatusNotFound)
+            return
+        }
+
+        if sender.Balance < request.Amount {
+            http.Error(w, "Insufficient balance", http.StatusBadRequest)
+            return
+        }
+
+        sender.Balance -= request.Amount
+        recipient.Balance += request.Amount
+
+        if err := sender.Update(db); err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
             return
         }
-        user.Password = string(hashedPassword)
-
-        if err := user.Create(db); err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-
-        token, err := auth.GenerateJWT(user.Email, jwtSecret)
-        if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-
-        w.WriteHeader(http.StatusCreated)
-        json.NewEncoder(w).Encode(map[string]string{"token": token})
-    }
-}
-
-func Login(db *sql.DB, jwtSecret string) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        var creds models.User
-        if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-            http.Error(w, err.Error(), http.StatusBadRequest)
-            return
-        }
-
-        user, err := models.GetByEmail(db, creds.Email)
-        if err != nil {
-            http.Error(w, "Invalid email or password", http.StatusUnauthorized)
-            return
-        }
-
-        if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(creds.Password)); err != nil {
-            http.Error(w, "Invalid email or password", http.StatusUnauthorized)
-            return
-        }
-
-        token, err := auth.GenerateJWT(user.Email, jwtSecret)
-        if err != nil {
+        if err := recipient.Update(db); err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
             return
         }
 
-        json.NewEncoder(w).Encode(map[string]string{"token": token})
-    }
-}
-
-func CreateUser(db *sql.DB) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        var user models.User
-        if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-            http.Error(w, err.Error(), http.StatusBadRequest)
-            return
+        senderTransaction := models.Transaction{
+            UserID: sender.ID,
+            Type:   "transfer",
+            Amount: -request.Amount,
+            Note:   "Transferred to " + recipient.Email,
         }
-
-        if err := user.Create(db); err != nil {
+        if err := senderTransaction.Create(db); err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
             return
         }
 
-        w.WriteHeader(http.StatusCreated)
-        json.NewEncoder(w).Encode(user)
-    }
-}
-
-func GetUser(db *sql.DB) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        id, err := strconv.Atoi(vars["id"])
-        if err != nil {
-            http.Error(w, "Invalid user ID", http.StatusBadRequest)
-            return
+        recipientTransaction := models.Transaction{
+            UserID: recipient.ID,
+            Type:   "transfer",
+            Amount: request.Amount,
+            Note:   "Received from " + sender.Email,
         }
-
-        user, err := models.GetByID(db, id)
-        if err != nil {
-            if err == sql.ErrNoRows {
-                http.Error(w, "User not found", http.StatusNotFound)
-            } else {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-            }
-            return
-        }
-
-        json.NewEncoder(w).Encode(user)
-    }
-}
-
-func GetUsers(db *sql.DB) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        users, err := models.GetAll(db)
-        if err != nil {
+        if err := recipientTransaction.Create(db); err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
             return
         }
 
-        json.NewEncoder(w).Encode(users)
-    }
-}
-
-func UpdateUser(db *sql.DB) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        id, err := strconv.Atoi(vars["id"])
-        if err != nil {
-            http.Error(w, "Invalid user ID", http.StatusBadRequest)
-            return
-        }
-
-        var user models.User
-        if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
-            http.Error(w, err.Error(), http.StatusBadRequest)
-            return
-        }
-        user.ID = id
-
-        if err := user.Update(db); err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-
-        json.NewEncoder(w).Encode(user)
-    }
-}
-
-func DeleteUser(db *sql.DB) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        vars := mux.Vars(r)
-        id, err := strconv.Atoi(vars["id"])
-        if err != nil {
-            http.Error(w, "Invalid user ID", http.StatusBadRequest)
-            return
-        }
-
-        if err := models.DeleteByID(db, id); err != nil {
-            if err == sql.ErrNoRows {
-                http.Error(w, "User not found", http.StatusNotFound)
-            } else {
-                http.Error(w, err.Error(), http.StatusInternalServerError)
-            }
-            return
-        }
-
-        w.WriteHeader(http.StatusNoContent)
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(sender)
     }
 }
